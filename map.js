@@ -22,7 +22,7 @@ const bikeLaneStyle = {
   'line-opacity': 0.5,
 };
 
-// Helper defined globally so it's accessible from event handlers
+// Convert station lon/lat to pixel coords on the map
 function getCoords(station) {
   const point = new mapboxgl.LngLat(+station.lon, +station.lat);
   const { x, y } = map.project(point);
@@ -65,8 +65,41 @@ map.on('load', async () => {
     return;
   }
 
-  const stations = jsonData.data.stations;
+  let stations = jsonData.data.stations;
   console.log('Stations Array:', stations);
+
+  // --- Step 4.1: Load the trip CSV ---
+  const trips = await d3.csv(
+    'https://dsc106.com/labs/lab07/data/bluebikes-traffic-2024-03.csv'
+  );
+  console.log('Loaded Trips:', trips.length);
+
+  // --- Step 4.2: Compute arrivals, departures, totalTraffic per station ---
+  const departures = d3.rollup(
+    trips,
+    v => v.length,
+    d => d.start_station_id
+  );
+  const arrivals = d3.rollup(
+    trips,
+    v => v.length,
+    d => d.end_station_id
+  );
+
+  stations = stations.map(station => {
+    const id = station.short_name;
+    station.arrivals = arrivals.get(id) ?? 0;
+    station.departures = departures.get(id) ?? 0;
+    station.totalTraffic = station.arrivals + station.departures;
+    return station;
+  });
+  console.log('Stations with traffic:', stations);
+
+  // --- Step 4.3: Square-root scale for circle radius ---
+  const radiusScale = d3
+    .scaleSqrt()
+    .domain([0, d3.max(stations, d => d.totalTraffic)])
+    .range([0, 25]);
 
   // --- Select the SVG overlay ---
   const svg = d3.select('#map').select('svg');
@@ -77,11 +110,18 @@ map.on('load', async () => {
     .data(stations)
     .enter()
     .append('circle')
-    .attr('r', 5)
-    .attr('fill', 'steelblue')
+    .attr('r', d => radiusScale(d.totalTraffic))
     .attr('stroke', 'white')
     .attr('stroke-width', 1)
-    .attr('opacity', 0.8);
+    .attr('opacity', 0.8)
+    // Step 4.4: tooltip showing exact numbers
+    .each(function (d) {
+      d3.select(this)
+        .append('title')
+        .text(
+          `${d.totalTraffic} trips (${d.departures} departures, ${d.arrivals} arrivals)`
+        );
+    });
 
   // --- Keep circles aligned as the map moves ---
   function updatePositions() {
